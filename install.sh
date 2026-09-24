@@ -51,7 +51,7 @@ fi
 # ---------------------------------------------------------------------
 # 常量 (均可用环境变量覆盖)
 # ---------------------------------------------------------------------
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 SCRIPT_URL="${XRAY_MANAGER_URL:-https://raw.githubusercontent.com/l1uz3/xray-manager/main/install.sh}"
 SHORTCUT="${XRAY_SHORTCUT:-/usr/local/bin/xr}"
 XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
