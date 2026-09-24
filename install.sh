@@ -51,7 +51,7 @@ fi
 # ---------------------------------------------------------------------
 # 常量 (均可用环境变量覆盖)
 # ---------------------------------------------------------------------
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 SCRIPT_URL="${XRAY_MANAGER_URL:-https://raw.githubusercontent.com/l1uz3/xray-manager/main/install.sh}"
 SHORTCUT="${XRAY_SHORTCUT:-/usr/local/bin/xr}"
 XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
@@ -713,6 +713,7 @@ install_xray() { # [版本号]
     done
     rm -rf "$dir"
     ok "Xray $(xray_ver) 已安装: $XRAY_BIN"
+    links_refresh # 内核版本变化会影响 links.txt 里的 mihomo 部分
     geo_cron_auto
     write_service
     if [[ ! -s $CONFIG_FILE ]]; then
@@ -884,7 +885,8 @@ version_gt() { # a b → a 比 b 新时返回 0
     IFS=. read -ra a <<<"$1"
     IFS=. read -ra b <<<"$2"
     for ((i = 0; i < ${#a[@]} || i < ${#b[@]}; i++)); do
-        x=$((10#${a[i]:-0})) y=$((10#${b[i]:-0}))
+        x=${a[i]//[!0-9]/} y=${b[i]//[!0-9]/}
+        x=$((10#${x:-0})) y=$((10#${y:-0}))
         ((x > y)) && return 0
         ((x < y)) && return 1
     done
@@ -2203,19 +2205,41 @@ mh_json() { # 类型 名称 凭证   (读取 node_links 的局部变量)
         --arg net "$typ" --arg path "$path" --arg host "$hh" --arg mode "$hmode" --arg svc "$svc" --arg obfs "$obfspw" \
         --arg method "$ssm" --arg sspw "$ssp" --arg user "$suser" --arg upass "$spass" "$JQ_MIHOMO"
 }
-mihomo_print() { # [节点名]  输出 mihomo (Clash Meta) 的 proxies 片段
+xray_mlkem_required() { # Xray ≥ 26.9: REALITY 服务端拒绝不带 X25519MLKEM768 的连接 (mihomo 默认不带, 链接也无法携带开关)
+    local v
+    v=$(xray_ver)
+    [[ -n $v ]] && ! version_gt 26.9.0 "$v"
+}
+reality_tags() { # [节点名]  列出 REALITY 节点
+    cfg_get '.inbounds[]? | select(.streamSettings.security == "reality") | select($t == "" or .tag == $t) | .tag' --arg t "${1:-}"
+}
+mihomo_proxies() { # 节点名...  输出 proxies: 下的条目
     local tag
-    [[ -s $CONFIG_FILE ]] || return 0
-    printf '# mihomo (Clash Meta) 节点配置, 复制到配置文件的 proxies: 下\n'
-    printf '# REALITY 节点已加 support-x25519mlkem768: true (分享链接无法携带该参数, 缺少时新版 Xray 会拒绝连接)\n'
-    printf 'proxies:\n'
-    if [[ -n ${1:-} ]]; then
-        node_links "$1" mihomo | cut -d $'\x1f' -f 2 | sed 's/^/  - /'
-        return
-    fi
-    while IFS= read -r tag; do
+    for tag in "$@"; do
         [[ -n $tag ]] && node_links "$tag" mihomo | cut -d $'\x1f' -f 2 | sed 's/^/  - /'
-    done < <(cfg_get '.inbounds[]?.tag')
+    done
+}
+mihomo_print() { # [节点名]  输出 mihomo (Clash Meta) 的 proxies 片段
+    local -a tags=()
+    [[ -s $CONFIG_FILE ]] || return 0
+    if [[ -n ${1:-} ]]; then tags=("$1"); else mapfile -t tags < <(cfg_get '.inbounds[]?.tag'); fi
+    printf '# mihomo (Clash Meta) 节点配置, 复制到配置文件的 proxies: 下\n'
+    printf '# REALITY 节点已加 support-x25519mlkem768: true (分享链接无法携带该参数, 缺少时 Xray ≥ 26.9 会拒绝连接)\n'
+    printf 'proxies:\n'
+    mihomo_proxies "${tags[@]}"
+}
+mihomo_notice() { # [节点名]  Xray ≥ 26.9 且涉及 REALITY 节点时, 在链接之后附上 mihomo 配置 (输出到终端)
+    local -a tags=()
+    xray_mlkem_required || return 0
+    mapfile -t tags < <(reality_tags "${1:-}")
+    ((${#tags[@]})) || return 0
+    say ""
+    say " ${yellow}mihomo / Clash Meta 用户注意: 服务端 Xray $(xray_ver) 要求 X25519MLKEM768, 导入上面的 REALITY 链接会连不上,${none}"
+    say " ${yellow}请把下面的配置复制到 mihomo 配置文件的 proxies: 下 (已加 support-x25519mlkem768: true 和 chrome 指纹):${none}"
+    {
+        printf 'proxies:\n'
+        mihomo_proxies "${tags[@]}"
+    } >&2
 }
 links_refresh() { # 重新生成链接文件
     local tmp tag label lines l
@@ -2232,19 +2256,33 @@ links_refresh() { # 重新生成链接文件
             while IFS= read -r l; do printf '%s\n' "${l#*$'\x1f'}"; done <<<"$lines"
             printf '\n'
         done < <(jq -r "$JQ_LIB"' .inbounds[]? | [.tag, nlabel] | join("\u001f")' "$CONFIG_FILE" 2>/dev/null)
+        if xray_mlkem_required; then
+            local -a rtags=()
+            mapfile -t rtags < <(reality_tags)
+            if ((${#rtags[@]})); then
+                printf '# ---- mihomo (Clash Meta) ----\n'
+                printf '# 服务端 Xray %s 要求 X25519MLKEM768, mihomo 导入上面的 REALITY 链接会连不上, 请改用下面的配置 (复制到 proxies: 下)\n' "$(xray_ver)"
+                printf 'proxies:\n'
+                mihomo_proxies "${rtags[@]}"
+            fi
+        fi
     } >"$tmp"
     mv -f "$tmp" "$LINK_FILE" && chmod 600 "$LINK_FILE"
 }
-links_print() { # [节点名]  只输出链接本身 (stdout), 便于复制或管道
+links_print() { # [节点名]  只输出链接本身 (stdout), 便于复制或管道; mihomo 提示走 stderr
     local tag
     [[ -s $CONFIG_FILE ]] || return 0
     if [[ -n ${1:-} ]]; then
         node_links "$1" | cut -d $'\x1f' -f 2
-        return
+    else
+        while IFS= read -r tag; do
+            [[ -n $tag ]] && node_links "$tag" | cut -d $'\x1f' -f 2
+        done < <(cfg_get '.inbounds[]?.tag')
     fi
-    while IFS= read -r tag; do
-        [[ -n $tag ]] && node_links "$tag" | cut -d $'\x1f' -f 2
-    done < <(cfg_get '.inbounds[]?.tag')
+    if xray_mlkem_required && [[ -n $(reality_tags "${1:-}") ]]; then
+        say "${yellow}# mihomo / Clash Meta 用户: REALITY 链接缺少 support-x25519mlkem768, 连 Xray $(xray_ver) 会失败, 请用 ${SHORTCUT##*/} mihomo ${1:-}导出配置${none}"
+    fi
+    return 0
 }
 node_qr() { # 节点名
     command -v qrencode >/dev/null 2>&1 || ensure_cmds qrencode || return 1
@@ -2253,6 +2291,9 @@ node_qr() { # 节点名
         say "${yellow}$name${none}"
         qrencode -t ANSIUTF8 -m 1 "$link" >&2
     done < <(node_links "$1")
+    if xray_mlkem_required && [[ -n $(reality_tags "$1") ]]; then
+        say "${yellow}mihomo / Clash Meta 扫码导入会缺少 support-x25519mlkem768, 连不上 Xray $(xray_ver), 请用上方的 mihomo 配置${none}"
+    fi
 }
 node_extra_info() { # 节点名   打印便于手动填写的关键参数
     local tag=$1 ib proto sec pcs
@@ -2301,7 +2342,11 @@ show_node() { # 节点名
     hr
     say " ${gray}全部链接保存在: $LINK_FILE${none}"
     if [[ $label == *REALITY* ]]; then
-        say " ${yellow}mihomo / Clash Meta 客户端: 请用 ${SHORTCUT##*/} mihomo 导出的配置 (链接导入会缺少 support-x25519mlkem768, 连新版 Xray 会失败)${none}"
+        if xray_mlkem_required; then
+            mihomo_notice "$tag"
+        else
+            say " ${gray}mihomo / Clash Meta 客户端建议用 ${SHORTCUT##*/} mihomo 导出的配置 (升级到 Xray ≥ 26.9 后, 链接导入的 REALITY 节点会连不上)${none}"
+        fi
     fi
 }
 view_nodes_menu() {
@@ -2316,11 +2361,12 @@ view_nodes_menu() {
         0) return 0 ;;
         m | M) mihomo_print ;;
         a | A)
-            links_print
+            links_print 2>/dev/null
             say ""
             info "订阅内容 (base64, 可粘贴到支持订阅文本的客户端):"
-            links_print | base64 | tr -d '\n'
+            links_print 2>/dev/null | base64 | tr -d '\n'
             printf '\n'
+            mihomo_notice
             ;;
         *)
             if [[ $c =~ ^[0-9]+$ ]] && ((c >= 1 && c <= ${#NODE_TAGS[@]})); then
