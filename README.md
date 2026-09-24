@@ -155,7 +155,7 @@ xr port <节点名> <新端口>
 |---|---|
 | `/usr/local/bin/xray` | Xray 内核 |
 | `/usr/local/etc/xray/config.json` | Xray 配置 |
-| `/usr/local/etc/xray-script/` | 脚本数据：`meta.json`（客户端参数）、`links.txt`（分享链接）、`certs/`、`backup/` |
+| `/usr/local/etc/xray-manager/` | 脚本数据：`meta.json`（客户端参数）、`links.txt`（分享链接）、`certs/`、`backup/` |
 | `/usr/local/share/xray/` | geoip.dat / geosite.dat |
 | `/var/log/xray/` | 日志 |
 | `/usr/local/bin/xr` | 快捷命令 |

@@ -52,13 +52,13 @@ fi
 # 常量 (均可用环境变量覆盖)
 # ---------------------------------------------------------------------
 SCRIPT_VERSION="1.0.0"
-SCRIPT_URL="${XRAY_SCRIPT_URL:-https://raw.githubusercontent.com/l1uz3/xray-manager/main/install.sh}"
+SCRIPT_URL="${XRAY_MANAGER_URL:-https://raw.githubusercontent.com/l1uz3/xray-manager/main/install.sh}"
 SHORTCUT="${XRAY_SHORTCUT:-/usr/local/bin/xr}"
 XRAY_BIN="${XRAY_BIN:-/usr/local/bin/xray}"
 XRAY_ASSET_DIR="${XRAY_ASSET_DIR:-/usr/local/share/xray}"
 CONFIG_FILE="${XRAY_CONFIG_FILE:-/usr/local/etc/xray/config.json}"
 CONFIG_DIR="${CONFIG_FILE%/*}"
-DATA_DIR="${XRAY_SCRIPT_DATA:-/usr/local/etc/xray-script}"
+DATA_DIR="${XRAY_MANAGER_DATA:-/usr/local/etc/xray-manager}"
 META_FILE="$DATA_DIR/meta.json"
 LINK_FILE="${XRAY_URL_FILE:-$DATA_DIR/links.txt}"
 CERT_DIR="$DATA_DIR/certs"
@@ -69,10 +69,10 @@ OPENRC_INIT="/etc/init.d/xray"
 PID_FILE="/run/xray.pid"
 BBR_SYSCTL="/etc/sysctl.d/99-xray-bbr.conf"
 ACME_SH="${HOME:-/root}/.acme.sh/acme.sh"
-SVC_MARK="# managed-by: xray-script"
-GEO_CRON_TAG="# xray-script-geo"
-XS_NO_RESTART="${XS_NO_RESTART:-0}"        # 测试用: 1 = 只写配置, 不重启服务
-XS_SKIP_CHECK="${XS_SKIP_CHECK:-0}"        # 测试用: 1 = 跳过 REALITY 目标联网检测
+SVC_MARK="# managed-by: xray-manager"
+GEO_CRON_TAG="# xray-manager-geo"
+XM_NO_RESTART="${XM_NO_RESTART:-0}"        # 测试用: 1 = 只写配置, 不重启服务
+XM_SKIP_CHECK="${XM_SKIP_CHECK:-0}"        # 测试用: 1 = 跳过 REALITY 目标联网检测
 
 BANNER=$(cat <<'EOF'
 __  ______
@@ -126,7 +126,7 @@ cleanup() {
 }
 init_workdir() {
     [[ -n $WORK_DIR && -d $WORK_DIR ]] && return 0
-    WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/xray-script.XXXXXX") || die "无法创建临时目录"
+    WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/xray-manager.XXXXXX") || die "无法创建临时目录"
     trap cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -713,7 +713,7 @@ install_xray() { # [版本号]
         chmod 600 "$CONFIG_FILE"
     fi
     n=$(jq '(.inbounds // []) | length' "$CONFIG_FILE" 2>/dev/null)
-    if [[ ${n:-0} -gt 0 && $XS_NO_RESTART != 1 ]]; then
+    if [[ ${n:-0} -gt 0 && $XM_NO_RESTART != 1 ]]; then
         if svc_restart_check; then ok "Xray 已重启"; else
             err "Xray 启动失败"
             show_start_error
@@ -834,7 +834,7 @@ install_shortcut() { # 以文件方式运行时复制自身; 通过 bash <(curl 
     src=$(readlink -f "${BASH_SOURCE[0]:-$0}" 2>/dev/null)
     if [[ -f $src && -r $src ]]; then
         [[ $src == "$(readlink -f "$SHORTCUT" 2>/dev/null)" ]] && return 0
-        grep -q 'managed-by: xray-script' "$src" 2>/dev/null || return 0
+        grep -q 'managed-by: xray-manager' "$src" 2>/dev/null || return 0
         if ! cmp -s "$src" "$SHORTCUT" 2>/dev/null; then
             mkdir -p "${SHORTCUT%/*}"
             cp -f "$src" "$SHORTCUT" 2>/dev/null && chmod 755 "$SHORTCUT"
@@ -842,7 +842,7 @@ install_shortcut() { # 以文件方式运行时复制自身; 通过 bash <(curl 
     elif [[ -n $SCRIPT_URL ]]; then # 每次通过一键命令运行, 都把快捷命令更新到仓库最新版
         f=$(tmpf) || return 0
         if DL_QUIET=1 download "$SCRIPT_URL" "$f" 2>/dev/null && bash -n "$f" 2>/dev/null &&
-            grep -q 'managed-by: xray-script' "$f" && ! cmp -s "$f" "$SHORTCUT" 2>/dev/null; then
+            grep -q 'managed-by: xray-manager' "$f" && ! cmp -s "$f" "$SHORTCUT" 2>/dev/null; then
             mkdir -p "${SHORTCUT%/*}"
             cp -f "$f" "$SHORTCUT" && chmod 755 "$SHORTCUT"
         fi
@@ -851,7 +851,7 @@ install_shortcut() { # 以文件方式运行时复制自身; 通过 bash <(curl 
 }
 update_script() {
     [[ -n $SCRIPT_URL ]] || {
-        warn "未设置脚本地址: 请在脚本顶部 SCRIPT_URL 填写 raw 地址, 或设置环境变量 XRAY_SCRIPT_URL"
+        warn "未设置脚本地址: 请在脚本顶部 SCRIPT_URL 填写 raw 地址, 或设置环境变量 XRAY_MANAGER_URL"
         return 1
     }
     local f
@@ -860,7 +860,7 @@ update_script() {
         err "下载失败"
         return 1
     }
-    if ! bash -n "$f" 2>/dev/null || ! grep -q 'managed-by: xray-script' "$f"; then
+    if ! bash -n "$f" 2>/dev/null || ! grep -q 'managed-by: xray-manager' "$f"; then
         err "下载的内容不是有效的脚本"
         return 1
     fi
@@ -868,7 +868,7 @@ update_script() {
 }
 safe_rm() { # 只删除路径中带 xray 的目录/文件, 防止误删
     case ${1%/} in
-        */xray | */xray-script | */xray/* | */xray-script/* | */xray.*) rm -rf "$1" ;;
+        */xray | */xray-manager | */xray/* | */xray-manager/* | */xray.*) rm -rf "$1" ;;
         *) warn "跳过删除 $1 (路径不像是 Xray 专用目录)" ;;
     esac
 }
@@ -910,7 +910,7 @@ uninstall_all() {
 
 # ---------------------------------------------------------------------
 # jq 公共函数库
-#   · 路由规则用 ruleTag 标识归属: xs-block-* / xs-custom-* / xs-user-* / xs-node-* / xs-default
+#   · 路由规则用 ruleTag 标识归属: xm-block-* / xm-custom-* / xm-user-* / xm-node-* / xm-default
 #     排序优先级: 手动规则 > 屏蔽 > 自定义分流 > 用户落地 > 节点落地 > 全局默认
 #   · 写配置时统一使用 v26.3.x 与 v26.9.x 都认识的字段名 (clients / network / accounts / address)
 # ---------------------------------------------------------------------
@@ -957,18 +957,18 @@ def port_hit($p): ($p | tonumber) as $n
         if test("^[0-9]+$") then tonumber == $n
         elif test("^[0-9]+-[0-9]+$") then (split("-") | map(tonumber)) as $r | ($r[0] <= $n and $n <= $r[1])
         else false end);
-def xs_prio: (.ruleTag // "") as $t
-  | if ($t | startswith("xs-block")) then 1
-    elif ($t | startswith("xs-custom")) then 2
-    elif ($t | startswith("xs-user-")) then 3
-    elif ($t | startswith("xs-node-")) then 4
-    elif $t == "xs-default" then 5
+def xm_prio: (.ruleTag // "") as $t
+  | if ($t | startswith("xm-block")) then 1
+    elif ($t | startswith("xm-custom")) then 2
+    elif ($t | startswith("xm-user-")) then 3
+    elif ($t | startswith("xm-node-")) then 4
+    elif $t == "xm-default" then 5
     else 0 end;
-def sort_rules: .routing.rules |= (to_entries | sort_by([(.value | xs_prio), .key]) | map(.value));
+def sort_rules: .routing.rules |= (to_entries | sort_by([(.value | xm_prio), .key]) | map(.value));
 def is_builtin: . as $t | ["direct", "block", "direct-v4", "direct-v6", "api"] | hasv($t);
-def node_out($t): first(.routing.rules[]? | select(.ruleTag == ("xs-node-" + $t)) | .outboundTag) // "";
-def user_out($e): first(.routing.rules[]? | select(.ruleTag == ("xs-user-" + $e)) | .outboundTag) // "";
-def default_out: first(.routing.rules[]? | select(.ruleTag == "xs-default") | .outboundTag) // "direct";
+def node_out($t): first(.routing.rules[]? | select(.ruleTag == ("xm-node-" + $t)) | .outboundTag) // "";
+def user_out($e): first(.routing.rules[]? | select(.ruleTag == ("xm-user-" + $e)) | .outboundTag) // "";
+def default_out: first(.routing.rules[]? | select(.ruleTag == "xm-default") | .outboundTag) // "direct";
 def notin($arr): . as $x | ($arr | map(select(. == $x)) | length) == 0;
 def uniqname($base; $used): first(($base), ($base + "-" + (range(2; 1000) | tostring)) | select(notin($used)));
 def alltags: [(.inbounds[]?.tag), (.outbounds[]?.tag)] | map(select(. != null and . != ""));
@@ -983,12 +983,12 @@ def odesc:
     + " " + ($a | tostring) + (if $po != "" and $po != "null" then ":" + $po else "" end)
     + (if .streamSettings.sockopt.dialerProxy then " (经由 " + .streamSettings.sockopt.dialerProxy + ")" else "" end);
 def set_node_out($t; $o):
-  .routing.rules |= map(select(.ruleTag != ("xs-node-" + $t)))
-  | (if $o == "" then . else .routing.rules += [{ruleTag: ("xs-node-" + $t), inboundTag: [$t], outboundTag: $o}] end)
+  .routing.rules |= map(select(.ruleTag != ("xm-node-" + $t)))
+  | (if $o == "" then . else .routing.rules += [{ruleTag: ("xm-node-" + $t), inboundTag: [$t], outboundTag: $o}] end)
   | sort_rules;
 def set_user_out($e; $o):
-  .routing.rules |= map(select(.ruleTag != ("xs-user-" + $e)))
-  | (if $o == "" then . else .routing.rules += [{ruleTag: ("xs-user-" + $e), user: [$e], outboundTag: $o}] end)
+  .routing.rules |= map(select(.ruleTag != ("xm-user-" + $e)))
+  | (if $o == "" then . else .routing.rules += [{ruleTag: ("xm-user-" + $e), user: [$e], outboundTag: $o}] end)
   | sort_rules;
 JQEOF
 
@@ -998,9 +998,9 @@ JQEOF
 read -r -d '' JQ_NORMALIZE <<'JQEOF'
 def ensure_out($t; $o): if (.outbounds | map(.tag // "") | hasv($t)) then . else .outbounds += [$o] end;
 def add_default_rule:
-  if ([.routing.rules[] | select(.ruleTag == "xs-default")] | length) > 0 then .
+  if ([.routing.rules[] | select(.ruleTag == "xm-default")] | length) > 0 then .
   else (if (.outbounds[0].tag // "") == "" then .outbounds[0].tag = uniqname("out-default"; alltags) else . end)
-       | .routing.rules += [{ruleTag: "xs-default", network: "tcp,udp", outboundTag: .outbounds[0].tag}]
+       | .routing.rules += [{ruleTag: "xm-default", network: "tcp,udp", outboundTag: .outbounds[0].tag}]
   end;
 (if type == "object" then . else {} end)
 | .log = (if (.log | type) == "object" then .log else {loglevel: "warning", access: "none", error: ($logdir + "/error.log")} end)
@@ -1043,8 +1043,8 @@ default_config() {
         inbounds: [],
         outbounds: [{tag: "direct", protocol: "freedom"}, {tag: "block", protocol: "blackhole"}],
         routing: {domainStrategy: "IPIfNonMatch", rules: [
-            {ruleTag: "xs-block-private", ip: ["geoip:private"], outboundTag: "block"},
-            {ruleTag: "xs-block-private-d", domain: ["geosite:private"], outboundTag: "block"}
+            {ruleTag: "xm-block-private", ip: ["geoip:private"], outboundTag: "block"},
+            {ruleTag: "xm-block-private-d", domain: ["geosite:private"], outboundTag: "block"}
         ]}
     }'
 }
@@ -1154,7 +1154,7 @@ cfg_commit() {
         err "写入配置失败"
         return 1
     fi
-    if [[ $XS_NO_RESTART == 1 ]]; then
+    if [[ $XM_NO_RESTART == 1 ]]; then
         links_refresh
         return 0
     fi
@@ -1427,7 +1427,7 @@ pick_reality_target() { # → REALITY_SNI REALITY_TARGET
                 continue
             }
         fi
-        if [[ $XS_SKIP_CHECK == 1 ]] || reality_check "$REALITY_TARGET"; then return 0; fi
+        if [[ $XM_SKIP_CHECK == 1 ]] || reality_check "$REALITY_TARGET"; then return 0; fi
         v=""
     done
 }
@@ -2360,7 +2360,7 @@ node_rename() {
     [[ $new == "$tag" ]] && return 0
     cfg_jq '(.inbounds[] | select(.tag == $o) | .tag) = $n
         | .routing.rules |= map(
-            (if .ruleTag == ("xs-node-" + $o) then .ruleTag = ("xs-node-" + $n) else . end)
+            (if .ruleTag == ("xm-node-" + $o) then .ruleTag = ("xm-node-" + $n) else . end)
             | (if (.inboundTag | type) == "array" then .inboundTag |= map(if . == $o then $n else . end) else . end))' \
         --arg o "$tag" --arg n "$new" || return 1
     meta_set '.nodes[$n] = (.nodes[$o] // {}) | del(.nodes[$o])' --arg o "$tag" --arg n "$new"
@@ -2386,9 +2386,9 @@ node_delete() {
     crt=$(cfg_get '.inbounds[] | select(.tag == $t) | .streamSettings.tlsSettings.certificates[0].certificateFile // ""' --arg t "$tag")
     cfg_jqL '([.inbounds[] | select(.tag == $t) | .settings.clients[]?.email] | map(select(. != null))) as $em
         | .inbounds |= map(select(.tag != $t))
-        | .routing.rules |= map(select(.ruleTag != ("xs-node-" + $t)))
-        | .routing.rules |= map(select((((.ruleTag // "") | startswith("xs-user-")) and ((.user // []) | any(.[]; . as $u | $em | hasv($u)))) | not))
-        | .routing.rules |= map(if ((.ruleTag // "") | startswith("xs-custom")) and ((.inboundTag | type) == "array")
+        | .routing.rules |= map(select(.ruleTag != ("xm-node-" + $t)))
+        | .routing.rules |= map(select((((.ruleTag // "") | startswith("xm-user-")) and ((.user // []) | any(.[]; . as $u | $em | hasv($u)))) | not))
+        | .routing.rules |= map(if ((.ruleTag // "") | startswith("xm-custom")) and ((.inboundTag | type) == "array")
                                 then (.inboundTag -= [$t] | select((.inboundTag | length) > 0)) else . end)' --arg t "$tag" || return 1
     cfg_commit || return 1
     meta_set 'del(.nodes[$t])' --arg t "$tag"
@@ -3258,10 +3258,10 @@ landing_list() { # 打印落地列表并填充 LANDING_TAGS
     LANDING_TAGS=()
     mapfile -t rows < <(cfg_getL '. as $r | .outbounds[] | select(.tag != null and (.tag | is_builtin | not)) | .tag as $t
         | [$t, odesc, ([($r | .routing.rules[]?) | select(.outboundTag == $t) | (.ruleTag // "手动规则")
-             | if startswith("xs-node-") then "节点 " + ltrimstr("xs-node-")
-               elif startswith("xs-user-") then "用户 " + ltrimstr("xs-user-")
-               elif . == "xs-default" then "全局默认"
-               elif startswith("xs-custom") then "分流规则"
+             | if startswith("xm-node-") then "节点 " + ltrimstr("xm-node-")
+               elif startswith("xm-user-") then "用户 " + ltrimstr("xm-user-")
+               elif . == "xm-default" then "全局默认"
+               elif startswith("xm-custom") then "分流规则"
                else . end] | unique | join(", "))] | join("\u001f")')
     if ((${#rows[@]} == 0)); then
         say " ${gray}(还没有落地; 未设置落地时所有流量从本机直连出去)${none}"
@@ -3332,7 +3332,7 @@ landing_test() { # 出站名   用临时 xray 实例测试, 不影响正在运�
     port=$(free_port tcp)
     f=$(tmpf) && mv -f "$f" "$f.json" && f="$f.json"
     jq --arg t "$tag" --argjson p "$port" '{log: {loglevel: "warning"},
-        inbounds: [{tag: "xs-test-in", listen: "127.0.0.1", port: $p, protocol: "socks", settings: {udp: false}}],
+        inbounds: [{tag: "xm-test-in", listen: "127.0.0.1", port: $p, protocol: "socks", settings: {udp: false}}],
         outbounds: ([.outbounds[] | select(.tag == $t)] + [.outbounds[] | select(.tag != $t)]),
         routing: {rules: []}}' "$(cfg_src)" >"$f" || return 1
     info "正在通过 [$tag] 测试出口 (最长约 15 秒) ..."
@@ -3360,8 +3360,8 @@ set_default_out() {
     cfg_load || return 1
     say "当前全局默认出口: $(out_name "$(cfg_getL default_out)")  (没有单独设置出站的节点 / 用户都走这里)"
     pick_outbound "新的全局默认出口" 0 || return 1
-    cfg_jqL '.routing.rules |= map(select(.ruleTag != "xs-default"))
-        | (if $o == "direct" then . else .routing.rules += [{ruleTag: "xs-default", network: "tcp,udp", outboundTag: $o}] end)
+    cfg_jqL '.routing.rules |= map(select(.ruleTag != "xm-default"))
+        | (if $o == "direct" then . else .routing.rules += [{ruleTag: "xm-default", network: "tcp,udp", outboundTag: $o}] end)
         | sort_rules' --arg o "$PICKED_OUT" || return 1
     cfg_commit && ok "全局默认出口: $(out_name "$PICKED_OUT")"
 }
@@ -3403,14 +3403,14 @@ landing_chain() {
 # ---------------------------------------------------------------------
 rule_state() { # 键 → 开/关
     local n
-    n=$(cfg_get '[.routing.rules[]? | select((.ruleTag // "") | startswith($p))] | length' --arg p "xs-block-$1")
+    n=$(cfg_get '[.routing.rules[]? | select((.ruleTag // "") | startswith($p))] | length' --arg p "xm-block-$1")
     if ((${n:-0} > 0)); then echo "${green}开${none}"; else echo "关"; fi
 }
 rule_toggle() { # private|bt|ads|cn
     local key=$1 n json
-    n=$(cfg_get '[.routing.rules[]? | select((.ruleTag // "") | startswith($p))] | length' --arg p "xs-block-$key")
+    n=$(cfg_get '[.routing.rules[]? | select((.ruleTag // "") | startswith($p))] | length' --arg p "xm-block-$key")
     if ((${n:-0} > 0)); then
-        cfg_jq '.routing.rules |= map(select((.ruleTag // "") | startswith($p) | not))' --arg p "xs-block-$key" || return 1
+        cfg_jq '.routing.rules |= map(select((.ruleTag // "") | startswith($p) | not))' --arg p "xm-block-$key" || return 1
         # Xray ≥ 26.9 的 freedom 默认也会拦截 VLESS/VMess/Trojan/SS/Hy2 入站访问私有地址, 关闭屏蔽时需显式放行
         if [[ $key == private ]]; then
             cfg_jq '(.outbounds[] | select(.protocol == "freedom" and ((.tag // "") | test("^direct(-v4|-v6)?$"))))
@@ -3418,10 +3418,10 @@ rule_toggle() { # private|bt|ads|cn
         fi
     else
         case $key in
-            private) json='[{"ruleTag":"xs-block-private","ip":["geoip:private"],"outboundTag":"block"},{"ruleTag":"xs-block-private-d","domain":["geosite:private"],"outboundTag":"block"}]' ;;
-            bt) json='[{"ruleTag":"xs-block-bt","protocol":["bittorrent"],"outboundTag":"block"}]' ;;
-            ads) json='[{"ruleTag":"xs-block-ads","domain":["geosite:category-ads-all"],"outboundTag":"block"}]' ;;
-            cn) json='[{"ruleTag":"xs-block-cn","domain":["geosite:cn"],"outboundTag":"block"},{"ruleTag":"xs-block-cn-ip","ip":["geoip:cn"],"outboundTag":"block"}]' ;;
+            private) json='[{"ruleTag":"xm-block-private","ip":["geoip:private"],"outboundTag":"block"},{"ruleTag":"xm-block-private-d","domain":["geosite:private"],"outboundTag":"block"}]' ;;
+            bt) json='[{"ruleTag":"xm-block-bt","protocol":["bittorrent"],"outboundTag":"block"}]' ;;
+            ads) json='[{"ruleTag":"xm-block-ads","domain":["geosite:category-ads-all"],"outboundTag":"block"}]' ;;
+            cn) json='[{"ruleTag":"xm-block-cn","domain":["geosite:cn"],"outboundTag":"block"},{"ruleTag":"xm-block-cn-ip","ip":["geoip:cn"],"outboundTag":"block"}]' ;;
         esac
         cfg_jqL '.routing.rules += $r | sort_rules' --argjson r "$json" || return 1
         if [[ $key == private ]]; then
@@ -3478,11 +3478,11 @@ custom_rule_add() {
         }
     fi
     pick_outbound "匹配到的流量走哪个出口" 0 || return 1
-    n=$(cfg_get '[.routing.rules[]? | (.ruleTag // "") | select(startswith("xs-custom-")) | ltrimstr("xs-custom-") | split("-")[0] | tonumber?] | max // 0')
+    n=$(cfg_get '[.routing.rules[]? | (.ruleTag // "") | select(startswith("xm-custom-")) | ltrimstr("xm-custom-") | split("-")[0] | tonumber?] | max // 0')
     n=$((${n:-0} + 1))
     cfg_jqL '($dom | split(",") | map(select(. != ""))) as $d | ($ip | split(",") | map(select(. != ""))) as $i
-        | .routing.rules += ((if ($d | length) > 0 then [{ruleTag: ("xs-custom-" + $n), domain: $d}] else [] end)
-            + (if ($i | length) > 0 then [{ruleTag: ("xs-custom-" + $n + "-ip"), ip: $i}] else [] end)
+        | .routing.rules += ((if ($d | length) > 0 then [{ruleTag: ("xm-custom-" + $n), domain: $d}] else [] end)
+            + (if ($i | length) > 0 then [{ruleTag: ("xm-custom-" + $n + "-ip"), ip: $i}] else [] end)
             | map(. + {outboundTag: $o} + (if $nodes != null then {inboundTag: $nodes} else {} end)))
         | sort_rules' --arg dom "$dom" --arg ip "$ip" --arg n "$n" --arg o "$PICKED_OUT" --argjson nodes "$nodes" || return 1
     cfg_commit && ok "分流规则已添加: ${dom}${dom:+${ip:+,}}${ip} → $(out_name "$PICKED_OUT")"
@@ -3490,7 +3490,7 @@ custom_rule_add() {
 custom_rule_del() {
     local rows row i=0 tag match out nodes c
     local -a tags=()
-    mapfile -t rows < <(cfg_get '.routing.rules[]? | select((.ruleTag // "") | startswith("xs-custom-"))
+    mapfile -t rows < <(cfg_get '.routing.rules[]? | select((.ruleTag // "") | startswith("xm-custom-"))
         | [.ruleTag, (((.domain // []) + (.ip // [])) | join(",")), (.outboundTag // ""), ((.inboundTag // ["全部节点"]) | join(","))] | join("\u001f")')
     if ((${#rows[@]} == 0)); then
         info "暂无自定义分流规则"
@@ -3889,7 +3889,7 @@ main_menu() {
         [[ -s $CONFIG_FILE ]] && n=$(jq '(.inbounds // []) | length' "$CONFIG_FILE" 2>/dev/null)
         say ""
         say "${cyan}${BANNER}${none}"
-        say " ${gray}脚本 v$SCRIPT_VERSION | $OS_NAME | $INIT$([[ -x $SHORTCUT ]] && echo " | 快捷命令: ${SHORTCUT##*/}")${none}"
+        say " ${gray}Xray Manager v$SCRIPT_VERSION | $OS_NAME | $INIT$([[ -x $SHORTCUT ]] && echo " | 快捷命令: ${SHORTCUT##*/}")${none}"
         say " Xray: $(xray_status_text)   节点: ${n:-0}"
         hr
         say " ${cyan}1.${none} 安装 / 更新 Xray 内核"
@@ -3921,7 +3921,7 @@ main_menu() {
 }
 usage() {
     cat >&2 <<EOF
-Xray 管理脚本 v$SCRIPT_VERSION
+Xray Manager v$SCRIPT_VERSION
 用法: ${SHORTCUT##*/} [命令]
   (无参数)                 交互菜单
   install [版本]           安装 / 更新 Xray 内核 (默认最新正式版)
@@ -3966,7 +3966,7 @@ cli() {
         bbr) enable_bbr ;;
         backup) backup_create ;;
         uninstall) uninstall_all ;;
-        version | -v | --version) say "脚本 v$SCRIPT_VERSION  Xray $(xray_ver)" ;;
+        version | -v | --version) say "Xray Manager v$SCRIPT_VERSION  Xray $(xray_ver)" ;;
         help | -h | --help) usage ;;
         *)
             usage
@@ -3977,7 +3977,7 @@ cli() {
 main() {
     init_workdir
     [[ $EUID -eq 0 ]] || die "请使用 root 用户运行 (可先执行 sudo -i)"
-    if (($# == 0)) && [[ ! -t 0 && ${XS_ALLOW_PIPE:-0} != 1 ]]; then
+    if (($# == 0)) && [[ ! -t 0 && ${XM_ALLOW_PIPE:-0} != 1 ]]; then
         die "标准输入不是终端 (可能用了 curl ... | bash), 菜单无法读取输入。请改用: bash <(curl -fsSL $SCRIPT_URL)"
     fi
     detect_system
@@ -3991,7 +3991,7 @@ main() {
     main_menu
 }
 
-if [[ ${XRAY_SCRIPT_SOURCE_ONLY:-0} == 1 ]]; then
+if [[ ${XRAY_MANAGER_SOURCE_ONLY:-0} == 1 ]]; then
     init_workdir
     detect_system
     return 0 2>/dev/null || exit 0
