@@ -71,8 +71,10 @@ BBR_SYSCTL="/etc/sysctl.d/99-xray-bbr.conf"
 ACME_SH="${HOME:-/root}/.acme.sh/acme.sh"
 SVC_MARK="# managed-by: xray-manager"
 GEO_CRON_TAG="# xray-manager-geo"
+GEO_LOG="$LOG_DIR/geo-update.log"
 XM_NO_RESTART="${XM_NO_RESTART:-0}"        # 测试用: 1 = 只写配置, 不重启服务
 XM_SKIP_CHECK="${XM_SKIP_CHECK:-0}"        # 测试用: 1 = 跳过 REALITY 目标联网检测
+XM_NO_UPDATE_CHECK="${XM_NO_UPDATE_CHECK:-0}" # 1 = 打开菜单时不检查脚本新版本
 
 BANNER=$(cat <<'EOF'
 __  ______
@@ -95,7 +97,7 @@ declare -A Q=()
 OS_ID="" OS_NAME="" PKG="" INIT="none" PKG_UPDATED=0
 WORK_DIR="" TEST_PID="" CFG_WORK=""
 NEW_TAG="" NEW_PORT="" NEW_LISTEN="" NEW_L4="" NEW_IB="" NEW_META="{}"
-PICKED_OUT="" PICKED_NODE="" PICKED_USER="" LANDING_NEW_TAG="" RENAMED_TAG=""
+LATEST_SCRIPT="" PICKED_OUT="" PICKED_NODE="" PICKED_USER="" LANDING_NEW_TAG="" RENAMED_TAG=""
 CERT_FILE="" KEY_FILE="" CERT_DOMAIN="" CERT_SELF=0
 REALITY_SNI="" REALITY_TARGET="" REALITY_PRIV="" REALITY_PUB=""
 ENC_DEC="" ENC_ENC="" MLDSA_SEED="" MLDSA_VERIFY=""
@@ -702,11 +704,16 @@ install_xray() { # [版本号]
         err "安装 xray 失败"
         return 1
     fi
-    if [[ ! -s $XRAY_ASSET_DIR/geosite.dat || $(meta_get '.settings.geo_source // "official"') == official ]]; then
-        cp -f "$dir/x/geoip.dat" "$dir/x/geosite.dat" "$XRAY_ASSET_DIR/" 2>/dev/null
-    fi
+    local f src
+    src=$(meta_get '.settings.geo_source // "official"')
+    for f in geoip.dat geosite.dat; do # 官方来源随内核一起更新; 其他来源只补齐缺失的文件
+        if [[ $src == official || ! -s $XRAY_ASSET_DIR/$f ]]; then
+            cp -f "$dir/x/$f" "$XRAY_ASSET_DIR/" 2>/dev/null || warn "发布包中没有 $f, 请稍后在 系统工具 → geo 规则文件 中手动更新"
+        fi
+    done
     rm -rf "$dir"
     ok "Xray $(xray_ver) 已安装: $XRAY_BIN"
+    geo_cron_auto
     write_service
     if [[ ! -s $CONFIG_FILE ]]; then
         default_config >"$CONFIG_FILE"
@@ -748,7 +755,7 @@ install_menu() {
     fi
 }
 update_geo() { # [loyalsoldier|official]
-    local src=${1:-$(meta_get '.settings.geo_source // "loyalsoldier"')} dir f want got base ver arch
+    local src=${1:-$(meta_get '.settings.geo_source // "official"')} dir f want got base ver arch
     dir=$(mktemp -d "$WORK_DIR/geo.XXXXXX")
     if [[ $src == official ]]; then
         ver=$(xray_ver)
@@ -784,7 +791,7 @@ update_geo() { # [loyalsoldier|official]
     mkdir -p "$XRAY_ASSET_DIR"
     cp -f "$dir/geoip.dat" "$dir/geosite.dat" "$XRAY_ASSET_DIR/" || return 1
     rm -rf "$dir"
-    meta_set '.settings.geo_source = $s' --arg s "$src"
+    meta_set '.settings.geo_source = $s | .settings.geo_last = {time: $t, ok: true}' --arg s "$src" --arg t "$(date '+%Y-%m-%d %H:%M:%S')"
     ok "geo 文件已更新 ($src)"
     if svc_running; then svc restart >/dev/null 2>&1; fi
     return 0
@@ -800,34 +807,102 @@ ensure_crond() {
     return 0
 }
 geo_cron_enabled() { crontab -l 2>/dev/null | grep -qF "$GEO_CRON_TAG"; }
+geo_cron_enable() {
+    ensure_cmds crontab || return 1
+    [[ -x $SHORTCUT ]] || {
+        err "快捷命令 $SHORTCUT 不存在 (请下载脚本后以文件方式运行一次)"
+        return 1
+    }
+    (
+        crontab -l 2>/dev/null | grep -vF "$GEO_CRON_TAG"
+        echo "30 4 * * 1 $SHORTCUT geo-cron >/dev/null 2>&1 $GEO_CRON_TAG"
+    ) | crontab - || return 1
+    ensure_crond
+    meta_set 'del(.settings.geo_cron)'
+}
+geo_cron_disable() {
+    crontab -l 2>/dev/null | grep -vF "$GEO_CRON_TAG" | crontab -
+    meta_set '.settings.geo_cron = "off"' # 记住用户的选择, 重装内核时不再自动开启
+}
+geo_cron_auto() { # 安装内核时自动开启每周更新 (用户手动关闭过则跳过)
+    geo_cron_enabled && return 0
+    [[ $(meta_get '.settings.geo_cron // ""') == off ]] && return 0
+    if geo_cron_enable >/dev/null 2>&1; then
+        ok "已开启: 每周一 04:30 自动更新 geo 文件 (可在 系统工具 → geo 规则文件 中关闭)"
+    else
+        info "未能开启 geo 文件自动更新, 可稍后在 系统工具 → geo 规则文件 中手动开启"
+    fi
+    return 0
+}
+geo_cron_run() { # 定时任务入口: 结果写入 $GEO_LOG, 失败时记录下来供菜单提示
+    local out rc t esc=$'\e'
+    t=$(date '+%Y-%m-%d %H:%M:%S')
+    out=$(DL_QUIET=1 update_geo 2>&1)
+    rc=$?
+    mkdir -p "$LOG_DIR"
+    {
+        if ((rc == 0)); then echo "[$t] 成功"; else echo "[$t] 失败 (退出码 $rc)"; fi
+        [[ -n $out ]] && sed "s/$esc\[[0-9;]*m//g; s/^/    /" <<<"$out"
+    } >>"$GEO_LOG"
+    tail -n 300 "$GEO_LOG" >"$GEO_LOG.tmp" 2>/dev/null && mv -f "$GEO_LOG.tmp" "$GEO_LOG"
+    ((rc == 0)) || meta_set '.settings.geo_last = {time: $t, ok: false}' --arg t "$t"
+    return $rc
+}
 geo_menu() {
+    local last
     title "geo 规则文件"
+    last=$(meta_get '.settings.geo_last | if . == null then "" else .time + (if .ok then " 成功" else " 失败" end) end')
+    say " 当前来源: $(meta_get '.settings.geo_source // "official"')   上次更新: ${last:-无记录}"
     say " ${cyan}1.${none} 立即更新 (Loyalsoldier 增强版, 规则更全)"
     say " ${cyan}2.${none} 立即更新 (官方, 随 Xray 发布包)"
-    say " ${cyan}3.${none} 每周自动更新 [$(geo_cron_enabled && echo "${green}开${none}" || echo 关)]"
+    say " ${cyan}3.${none} 每周自动更新 [$(geo_cron_enabled && echo "${green}开${none}" || echo 关)]  (使用上次选择的来源)"
+    say " ${cyan}4.${none} 查看自动更新日志"
     say " ${cyan}0.${none} 返回"
-    case $(ask_choice "请选择" 1 0 3) in
+    case $(ask_choice "请选择" 1 0 4) in
         1) update_geo loyalsoldier ;;
         2) update_geo official ;;
         3)
-            ensure_cmds crontab || return 1
             if geo_cron_enabled; then
-                crontab -l 2>/dev/null | grep -vF "$GEO_CRON_TAG" | crontab -
+                geo_cron_disable
                 ok "已关闭 geo 文件自动更新"
             else
-                [[ -x $SHORTCUT ]] || {
-                    err "快捷命令 $SHORTCUT 不存在 (请下载脚本后以文件方式运行一次)"
-                    return 1
-                }
-                (
-                    crontab -l 2>/dev/null | grep -vF "$GEO_CRON_TAG"
-                    echo "30 4 * * 1 $SHORTCUT update-geo >/dev/null 2>&1 $GEO_CRON_TAG"
-                ) | crontab -
-                ensure_crond
-                ok "已开启: 每周一 04:30 自动更新 geo 文件"
+                geo_cron_enable && ok "已开启: 每周一 04:30 自动更新 geo 文件"
             fi
             ;;
+        4) if [[ -s $GEO_LOG ]]; then tail -n 40 "$GEO_LOG" >&2; else info "暂无日志 ($GEO_LOG)"; fi ;;
     esac
+}
+remote_version() { # 只下载仓库脚本的开头部分, 读取 SCRIPT_VERSION
+    local url=$SCRIPT_URL proxy
+    proxy=$(meta_get '.settings.gh_proxy // ""')
+    [[ -n $proxy && $url == https://raw.githubusercontent.com/* ]] && url="${proxy%/}/$url"
+    curl -fsSL -r 0-4095 --connect-timeout 3 -m 5 "$url" 2>/dev/null | grep -m1 -oE '^SCRIPT_VERSION="[0-9.]+"' | cut -d'"' -f2
+}
+version_gt() { # a b → a 比 b 新时返回 0
+    local -a a b
+    local i x y
+    IFS=. read -ra a <<<"$1"
+    IFS=. read -ra b <<<"$2"
+    for ((i = 0; i < ${#a[@]} || i < ${#b[@]}; i++)); do
+        x=$((10#${a[i]:-0})) y=$((10#${b[i]:-0}))
+        ((x > y)) && return 0
+        ((x < y)) && return 1
+    done
+    return 1
+}
+check_update() { # 打开菜单时检查脚本新版本 (12 小时内只联网一次) → LATEST_SCRIPT
+    [[ -n $SCRIPT_URL && $XM_NO_UPDATE_CHECK != 1 ]] || return 0
+    local now last v
+    now=$(date +%s)
+    last=$(meta_get '.settings.update_check.time // 0')
+    if ((now - ${last:-0} >= 43200 || now < ${last:-0})); then
+        v=$(remote_version)
+        meta_set '.settings.update_check.time = $t | if $v != "" then .settings.update_check.latest = $v else . end' \
+            --argjson t "$now" --arg v "$v"
+    fi
+    v=$(meta_get '.settings.update_check.latest // ""')
+    if [[ -n $v ]] && version_gt "$v" "$SCRIPT_VERSION"; then LATEST_SCRIPT=$v; else LATEST_SCRIPT=""; fi
+    return 0
 }
 install_shortcut() { # 以文件方式运行时复制自身; 通过 bash <(curl ...) 运行时从仓库下载一份
     local src f
@@ -3892,7 +3967,8 @@ service_menu() {
 # 主菜单 / 命令行
 # ---------------------------------------------------------------------
 main_menu() {
-    local c n def
+    local c n def g
+    check_update
     while :; do
         n=0
         [[ -s $CONFIG_FILE ]] && n=$(jq '(.inbounds // []) | length' "$CONFIG_FILE" 2>/dev/null)
@@ -3900,6 +3976,9 @@ main_menu() {
         say "${cyan}${BANNER}${none}"
         say " ${gray}Xray Manager v$SCRIPT_VERSION | $OS_NAME | $INIT$([[ -x $SHORTCUT ]] && echo " | 快捷命令: ${SHORTCUT##*/}")${none}"
         say " Xray: $(xray_status_text)   节点: ${n:-0}"
+        [[ -n $LATEST_SCRIPT ]] && say " ${yellow}发现新版本 v$LATEST_SCRIPT (当前 v$SCRIPT_VERSION), 可在 8. 系统工具 → 更新本脚本 中升级${none}"
+        g=$(meta_get 'if .settings.geo_last.ok == false then .settings.geo_last.time else empty end')
+        [[ -n $g ]] && say " ${yellow}geo 文件自动更新失败 ($g), 日志: $GEO_LOG${none}"
         hr
         say " ${cyan}1.${none} 安装 / 更新 Xray 内核"
         say " ${cyan}2.${none} 添加节点"
@@ -3944,7 +4023,7 @@ Xray Manager v$SCRIPT_VERSION
   log                      实时查看日志
   test                     校验配置文件
   stats [reset]            查看流量统计
-  update-geo               更新 geo 规则文件
+  update-geo [来源]        更新 geo 规则文件 (official / loyalsoldier, 默认沿用上次的来源)
   bbr                      开启 BBR
   backup                   备份配置
   uninstall                卸载
@@ -3971,7 +4050,11 @@ cli() {
         log | logs) log_follow "$LOG_DIR/error.log" ;;
         test) xray_test "$CONFIG_FILE" && ok "配置校验通过" ;;
         stats) stats_show "${1:-}" ;;
-        update-geo | geo) update_geo ;;
+        update-geo | geo)
+            [[ -z ${1:-} || $1 == official || $1 == loyalsoldier ]] || die "用法: update-geo [official|loyalsoldier]"
+            update_geo "${1:-}"
+            ;;
+        geo-cron) geo_cron_run ;;
         bbr) enable_bbr ;;
         backup) backup_create ;;
         uninstall) uninstall_all ;;
