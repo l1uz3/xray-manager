@@ -490,9 +490,6 @@ LimitNOFILE=1000000
 [Install]
 WantedBy=multi-user.target
 EOF
-            # 官方安装脚本留下的 drop-in 会覆盖 ExecStart, 由本脚本接管后移除
-            rm -f /etc/systemd/system/xray.service.d/10-donot_touch_single_conf.conf \
-                /etc/systemd/system/xray.service.d/10-donot_touch_multi_conf.conf 2>/dev/null
             systemctl daemon-reload >/dev/null 2>&1
             systemctl enable xray >/dev/null 2>&1
             ;;
@@ -534,10 +531,10 @@ EOF
     esac
     return 0
 }
-service_ensure() { # 服务文件不存在或不是本脚本生成的 (如官方脚本以 nobody 运行) 时重写
+service_ensure() { # 服务文件不存在时生成
     case $INIT in
-        systemd) grep -qF "$SVC_MARK" "$SYSTEMD_UNIT" 2>/dev/null || write_service ;;
-        openrc) grep -qF "$SVC_MARK" "$OPENRC_INIT" 2>/dev/null || write_service ;;
+        systemd) [[ -f $SYSTEMD_UNIT ]] || write_service ;;
+        openrc) [[ -f $OPENRC_INIT ]] || write_service ;;
     esac
     return 0
 }
@@ -895,7 +892,6 @@ uninstall_all() {
     case $INIT in
         systemd)
             rm -f "$SYSTEMD_UNIT"
-            rm -rf /etc/systemd/system/xray.service.d
             systemctl daemon-reload >/dev/null 2>&1
             ;;
         openrc) rm -f "$OPENRC_INIT" ;;
@@ -906,10 +902,7 @@ uninstall_all() {
     if [[ ${CONFIG_DIR##*/} == xray ]]; then safe_rm "$CONFIG_DIR"; else rm -f "$CONFIG_FILE"; fi
     safe_rm "$DATA_DIR"
     safe_rm "$LOG_DIR"
-    if ((rm_bbr)); then
-        rm -f "$BBR_SYSCTL"
-        [[ -f /etc/sysctl.conf ]] && sed -i '/net.ipv4.tcp_congestion_control[[:space:]]*=[[:space:]]*bbr/d; /net.core.default_qdisc[[:space:]]*=[[:space:]]*fq/d' /etc/sysctl.conf
-    fi
+    ((rm_bbr)) && rm -f "$BBR_SYSCTL"
     rm -f "$SHORTCUT"
     ok "卸载完成"
     exit 0
@@ -1090,35 +1083,15 @@ meta_set() { # 过滤器 [jq 选项...]
 # 配置读写: cfg_load 生成规范化的工作副本 → cfg_jq 修改 → cfg_commit 校验/写入/重启/失败回滚
 # ---------------------------------------------------------------------
 cfg_src() { if [[ -n $CFG_WORK && -s $CFG_WORK ]]; then printf '%s' "$CFG_WORK"; else printf '%s' "$CONFIG_FILE"; fi; }
-strip_json_comments() { # 去掉 // 与 /* */ 注释, 字符串内的内容 (如 https://) 原样保留
-    awk '
-        {
-            out = ""; str = 0; esc = 0; n = length($0)
-            for (i = 1; i <= n; i++) {
-                c = substr($0, i, 1); d = substr($0, i + 1, 1)
-                if (blk) { if (c == "*" && d == "/") { blk = 0; i++ } continue }
-                if (str) { out = out c; if (esc) esc = 0; else if (c == "\\") esc = 1; else if (c == "\"") str = 0; continue }
-                if (c == "\"") { str = 1; out = out c; continue }
-                if (c == "/" && d == "/") break
-                if (c == "/" && d == "*") { blk = 1; i++; continue }
-                out = out c
-            }
-            print out
-        }' "$1"
-}
 cfg_load() {
     CFG_WORK=$(mktemp "$WORK_DIR/cfg.XXXXXX") || return 1
     if [[ -s $CONFIG_FILE ]]; then
-        if jq -e . "$CONFIG_FILE" >/dev/null 2>&1; then
-            cat "$CONFIG_FILE" >"$CFG_WORK"
-        else
-            strip_json_comments "$CONFIG_FILE" >"$CFG_WORK"
-            jq -e . "$CFG_WORK" >/dev/null 2>&1 || {
-                err "配置文件 $CONFIG_FILE 不是合法的 JSON, 请先修复, 或在 系统工具 中从备份恢复"
-                CFG_WORK=""
-                return 1
-            }
-        fi
+        jq -e . "$CONFIG_FILE" >/dev/null 2>&1 || {
+            err "配置文件 $CONFIG_FILE 不是合法的 JSON, 请先修复, 或在 系统工具 中从备份恢复"
+            CFG_WORK=""
+            return 1
+        }
+        cat "$CONFIG_FILE" >"$CFG_WORK"
     else
         default_config >"$CFG_WORK"
     fi
