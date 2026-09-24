@@ -12,7 +12,7 @@ Xray 一键安装与管理脚本：多协议多节点、落地分流、配置导
 - **系统兼容**：Alpine（OpenRC + BusyBox）、Debian / Ubuntu、CentOS / RHEL / Rocky / Alma、Fedora、Arch、openSUSE；systemd、OpenRC、无 init 的容器环境均可运行
 - **内核管理**：直接从 GitHub Releases 下载并校验 SHA256，可选最新正式版 / 预发布版 / 指定版本；国内机器可配置 GitHub 加速前缀
 - **安全修改**：每次改动先用 `xray run -test` 校验，启动失败自动回滚到修改前的配置；自动放行防火墙端口（ufw / firewalld / iptables）
-- **其他**：分享链接、二维码、base64 订阅、mihomo（Clash Meta）配置导出，流量统计，BBR，备份与恢复，geo 规则每周自动更新
+- **其他**：分享链接、二维码、base64 订阅、mihomo（Clash Meta）配置导出，流量统计，BBR，备份与恢复，geo 规则每周自动更新（安装内核时自动开启，结果写入日志）
 
 ## 一键安装
 
@@ -46,6 +46,8 @@ bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/l1uz3/xra
 
 安装完成后，用快捷命令 `xr` 随时打开菜单。
 
+`xr` 不会自动更新自己：打开菜单时会检查仓库里有没有新版本（12 小时内只检查一次），有的话在菜单顶部提示。需要更新时，在 `系统工具 → 更新本脚本` 中升级，或重新运行一次上面的一键安装命令。
+
 ## 菜单
 
 ```
@@ -70,7 +72,7 @@ bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/l1uz3/xra
 | 3 | VLESS + XHTTP + TLS | 是，或由 Nginx/CDN 反代 | 可套 CDN |
 | 4 | VLESS + Vision + TLS | 是 | 可设置回落 |
 | 5 | VLESS + Encryption | 否 | 后量子加密、无需证书，适合中转 ↔ 落地之间使用 |
-| 6 | VLESS + WebSocket | 是，或由 Nginx/CDN 反代 | 兼容老客户端 |
+| 6 | VLESS + WebSocket | 是，或由 Nginx/CDN 反代 | 兼容老客户端，可选开启 VLESS Encryption |
 | 7 | VMess + WebSocket | 是，或由 Nginx/CDN 反代 | 兼容老客户端 |
 | 8 | Trojan | REALITY 不需要 / TLS 需要 | |
 | 9 | Shadowsocks | 否 | 2022-blake3 系列与 AEAD 系列 |
@@ -144,7 +146,7 @@ xr port <节点名> <新端口>
 | `xr log` | 实时查看日志 |
 | `xr test` | 校验配置文件 |
 | `xr stats [reset]` | 查看流量统计 |
-| `xr update-geo` | 更新 geo 规则文件 |
+| `xr update-geo [official\|loyalsoldier]` | 更新 geo 规则文件（默认沿用上次选择的来源，没选过为官方） |
 | `xr bbr` | 开启 BBR |
 | `xr backup` | 备份配置 |
 | `xr uninstall` | 卸载 |
@@ -157,7 +159,7 @@ xr port <节点名> <新端口>
 | `/usr/local/etc/xray/config.json` | Xray 配置 |
 | `/usr/local/etc/xray-manager/` | 脚本数据：`meta.json`（客户端参数）、`links.txt`（分享链接）、`certs/`、`backup/` |
 | `/usr/local/share/xray/` | geoip.dat / geosite.dat |
-| `/var/log/xray/` | 日志 |
+| `/var/log/xray/` | 日志；`geo-update.log` 为 geo 自动更新记录 |
 | `/usr/local/bin/xr` | 快捷命令 |
 
 ## 兼容性说明
