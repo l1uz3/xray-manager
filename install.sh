@@ -1788,7 +1788,7 @@ add_vless_enc() {
     node_finalize
 }
 add_ws() { # vless|vmess
-    local proto=$1 mode uuid path extra client settings stream meta='{"fp":"chrome"}'
+    local proto=$1 mode uuid path extra client settings stream dec="none" flow="" meta='{"fp":"chrome"}'
     say "部署方式:"
     say "  ${cyan}1.${none} Xray 直接提供 TLS (需要证书, 可直接套 CDN)"
     say "  ${cyan}2.${none} 由 Nginx / Caddy / CDN 反代到本机 (默认只监听 127.0.0.1)"
@@ -1804,12 +1804,21 @@ add_ws() { # vless|vmess
     fi
     uuid=$(pick_uuid "$(gen_uuid)") || exit 1
     path=$(pick_path "WebSocket 路径") || exit 1
+    if [[ $proto == vless ]]; then
+        [[ $mode == 2 && $NEW_LISTEN != 127.0.0.1 && $NEW_LISTEN != ::1 ]] && warn "Xray 未做 TLS 且监听公网, 强烈建议启用 VLESS Encryption"
+        if ask_yn "启用 VLESS Encryption? (后量子加密 + Vision 流控; 客户端需 Xray 内核 ≥ 25.8)" n; then
+            pick_vlessenc || return 1
+            dec=$ENC_DEC flow=xtls-rprx-vision
+            meta=$(jq -c --arg e "$ENC_ENC" '. + {enc: $e}' <<<"$meta")
+        fi
+    fi
     extra=$(jq -nc --arg p "$path" '{wsSettings: {path: $p}}')
     if ((mode == 1)); then stream=$(tls_stream ws "$CERT_FILE" "$KEY_FILE" "$extra" '["http/1.1"]'); else stream=$(plain_stream ws "$extra"); fi
-    client=$(jq -nc --arg id "$uuid" --arg e "$NEW_TAG" '{id: $id, email: $e}')
     if [[ $proto == vless ]]; then
-        settings=$(jq -nc --argjson c "$client" '{clients: [$c], decryption: "none"}')
+        client=$(vless_client "$uuid" "$NEW_TAG" "$flow")
+        settings=$(jq -nc --argjson c "$client" --arg d "$dec" '{clients: [$c], decryption: $d}')
     else
+        client=$(jq -nc --arg id "$uuid" --arg e "$NEW_TAG" '{id: $id, email: $e}')
         settings=$(jq -nc --argjson c "$client" '{clients: [$c]}')
     fi
     NEW_IB=$(ib_json "$NEW_TAG" "$NEW_LISTEN" "$NEW_PORT" "$proto" "$settings" "$stream" 1)

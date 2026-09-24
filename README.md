@@ -70,7 +70,7 @@ bash <(curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/l1uz3/xra
 | 3 | VLESS + XHTTP + TLS | 是，或由 Nginx/CDN 反代 | 可套 CDN |
 | 4 | VLESS + Vision + TLS | 是 | 可设置回落 |
 | 5 | VLESS + Encryption | 否 | 后量子加密、无需证书，适合中转 ↔ 落地之间使用 |
-| 6 | VLESS + WebSocket | 是，或由 Nginx/CDN 反代 | 兼容老客户端 |
+| 6 | VLESS + WebSocket | 是，或由 Nginx/CDN 反代 | 兼容老客户端，可选开启 VLESS Encryption |
 | 7 | VMess + WebSocket | 是，或由 Nginx/CDN 反代 | 兼容老客户端 |
 | 8 | Trojan | REALITY 不需要 / TLS 需要 | |
 | 9 | Shadowsocks | 否 | 2022-blake3 系列与 AEAD 系列 |
