@@ -171,7 +171,7 @@ xr port <节点名> <新端口>
 - WebSocket、VMess、Trojan、Shadowsocks 在新版 Xray 中会打印弃用警告，但仍可正常使用；新部署建议优先选择 REALITY 或 XHTTP。
 - VLESS Encryption 需要客户端 Xray 内核 ≥ 25.8。
 - **预发布版 v26.9 起**，REALITY 服务端会拒绝不带 X25519MLKEM768（后量子混合密钥交换）的连接：旧版客户端或非 chrome 指纹会连不上，服务端日志显示 `REALITY: processed invalid connection ... authentication failed or validation criteria not met`。遇到时把客户端更新到最新版并使用 chrome 指纹，或把服务端换成正式版：`xr install v26.3.27`。
-- **mihomo（Clash Meta）用户注意**：mihomo 默认会从握手中去掉 X25519MLKEM768，而分享链接无法携带开启它的参数，所以用 vless:// 链接导入的 REALITY 节点连不上 v26.9 以后的服务端。请用 `xr mihomo`（或菜单 `3 → m`）导出的配置，里面已加上 `support-x25519mlkem768: true` 和 `client-fingerprint: chrome`；已在 mihomo v1.19.31 上实测通过。
+- **mihomo（Clash Meta）用户注意**：mihomo 默认会从握手中去掉 X25519MLKEM768，而分享链接无法携带开启它的参数，所以用 vless:// 链接导入的 REALITY 节点连不上 v26.9 以后的服务端。服务端内核 ≥ 26.9 时，脚本在所有输出链接的地方都会一并处理：查看节点详情（包括添加节点后）和菜单 `3 → a` 会在链接下方直接附上 mihomo 配置，`links.txt` 末尾追加 mihomo 配置，`xr links` 和二维码会给出提示。也可以随时用 `xr mihomo`（或菜单 `3 → m`）导出全部节点的配置。导出的配置已加上 `support-x25519mlkem768: true` 和 `client-fingerprint: chrome`，已在 mihomo v1.19.31 上实测通过。
 
 ## 卸载
 
